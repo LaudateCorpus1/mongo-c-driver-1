@@ -14,6 +14,8 @@
 #ifndef GRIDFS_INCLUDED
 #define GRIDFS_INCLUDED
 
+MONGO_EXTERN_C_START
+
 enum {DEFAULT_CHUNK_SIZE = 256 * 1024};
 
 typedef uint64_t gridfs_offset;
@@ -280,5 +282,7 @@ gridfs_offset gridfile_read(gridfile* gfile, gridfs_offset size, char* buf);
  *  @return - resulting offset location
  */
 gridfs_offset gridfile_seek(gridfile* gfile, gridfs_offset offset);
+
+MONGO_EXTERN_C_END
 
 #endif
