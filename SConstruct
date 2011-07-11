@@ -31,14 +31,28 @@ AddOption('--d',
           action='store_false',
           help='disable optimizations')
 
+AddOption('--arch',
+          dest='architecture',
+          action='store',
+	  help='Specify which architecture to compile for')
+
+AddOption('--sdk',
+          dest='sdk',
+	  action='store',
+	  help='Specify SDK by build with')
+
+AddOption('--osx-min-version',
+          dest='minversion',
+	  action='store',
+	  help='Specify minimun version for OSX')
+		
+
 import os
 import sys
 
 import buildscripts
 
-env = Environment( ENV=os.environ )
-
-
+env = Environment( ENV=os.environ ) 
 
 #  ---- Docs ----
 def build_docs(env, target, source):
@@ -46,30 +60,41 @@ def build_docs(env, target, source):
     docs.main()
 
 env.Alias("docs", [], [build_docs])
-env.AlwaysBuild("docs")
-
-
+env.AlwaysBuild("docs") 
 
 # ---- Libraries ----
-if os.sys.platform in ["darwin", "linux2"]:
-    env.Append( CPPFLAGS=" -pedantic -Wall -ggdb -DMONGO_HAVE_STDINT" )
-    env.Append( CPPPATH=["/opt/local/include/"] )
-    env.Append( LIBPATH=["/opt/local/lib/"] )
+if os.sys.platform in ["darwin", "linux2"]: 
+    env.Append( CCFLAGS=" -pedantic -Wall -ggdb" )
+    if os.sys.platform == "linux2":
+        env.Append( CPATH=["/opt/local/include/"] ) 
+        env.Append( LIBPATH=["/opt/local/lib/"] )
+    env.Append( CPPDEFINES="MONGO_HAVE_STDINT" )
 
     if GetOption('use_c99'):
-        env.Append( CFLAGS=" -std=c99 " )
-        env.Append( CXXDEFINES="MONGO_HAVE_STDINT" )
+        env.Append( CCFLAGS=" -std=c99 " )
     else:
-        env.Append( CFLAGS=" -ansi " )
+        env.Append( CCFLAGS=" -ansi " )
 
     if GetOption('optimize'):
-        env.Append( CPPFLAGS=" -O3 " )
+        env.Append( CCFLAGS=" -O3 " )
         # -O3 benchmarks *significantly* faster than -O2 when disabling networking
 elif 'win32' == os.sys.platform:
     env.Append( LIBS='ws2_32' )
 
-#we shouldn't need these options in c99 mode
-if not GetOption('use_c99'):
+if GetOption('architecture'):
+    env.Append( CCFLAGS="-arch %s"%GetOption('architecture')) 	
+    env.Append( LINKFLAGS="-arch %s"%GetOption('architecture'))
+
+if GetOption('sdk'):
+    env.Append( CCFLAGS="-isysroot %s"%GetOption('sdk'))
+    env.Append( LINKFLAGS="-isysroot %s"%GetOption('sdk'))
+
+if GetOption('minversion'):
+    env.Append( CCFLAGS="-mmacosx-version-min=%s"%GetOption('minversion'))
+    env.Append( LINKFLAGS="-mmacosx-version-min=%s"%GetOption('minversion'))
+
+#we shouldn't need these options in c99 mode or if allready set for darwin and linux2 
+if not GetOption('use_c99') and not os.sys.platform in ["darwin", "linux2"]:
     conf = Configure(env)
 
     if not conf.CheckType('int64_t'):
