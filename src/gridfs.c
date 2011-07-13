@@ -1,7 +1,19 @@
-/*--------------------------------------------------------------------*/
-/* gridfs.c                                                           */
-/* Author: Christopher Triolo                                         */
-/*--------------------------------------------------------------------*/
+/* gridfs.c */
+
+/*    Copyright 2009-2011 10gen Inc.
+ *
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
+ */
 
 #include "gridfs.h"
 #include "mongo.h"
@@ -29,7 +41,7 @@ static bson * chunk_new(bson_oid_t id, int chunkNumber,
   bson_buffer_init(&buf);
   bson_append_oid(&buf, "files_id", &id);
   bson_append_int(&buf, "n", chunkNumber);
-  bson_append_binary(&buf, "data", 2, data, len);
+  bson_append_binary(&buf, "data", BSON_BIN_BINARY, data, len);
   bson_from_buffer(b, &buf);
   return  b;
 }

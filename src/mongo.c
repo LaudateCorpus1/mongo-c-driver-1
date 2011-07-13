@@ -1,6 +1,6 @@
 /* mongo.c */
 
-/*    Copyright 2009, 2010 10gen Inc.
+/*    Copyright 2009-2011 10gen Inc.
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -167,6 +167,7 @@ int mongo_connect( mongo_connection * conn , const char * host, int port ){
     strncpy( conn->primary->host, host, strlen( host ) + 1 );
     conn->primary->port = port;
     conn->primary->next = NULL;
+    conn->conn_timeout_ms = 0;
 
     conn->err = 0;
     conn->errstr = NULL;
@@ -185,6 +186,8 @@ void mongo_replset_init_conn( mongo_connection* conn, const char* name ) {
     memcpy( conn->replset->name, name, strlen( name ) + 1  );
 
     conn->primary = bson_malloc( sizeof( mongo_host_port ) );
+
+    conn->conn_timeout_ms = 0;
 
     conn->err = 0;
     conn->errstr = NULL;
@@ -598,7 +601,7 @@ mongo_cursor* mongo_find(mongo_connection* conn, const char* ns, bson* query,
 
     int sl;
     int res;
-    volatile mongo_cursor * cursor; /* volatile due to longjmp in mongo exception handler */
+    mongo_cursor * cursor;
     char * data;
     mongo_message * mm = mongo_message_create( 16 + /* header */
                                                4 + /*  options */
@@ -607,7 +610,6 @@ mongo_cursor* mongo_find(mongo_connection* conn, const char* ns, bson* query,
                                                bson_size( query ) +
                                                bson_size( fields ) ,
                                                0 , 0 , MONGO_OP_QUERY );
-
 
     data = &mm->data;
     data = mongo_data_append32( data , &options );
@@ -629,7 +631,7 @@ mongo_cursor* mongo_find(mongo_connection* conn, const char* ns, bson* query,
 
     res = mongo_read_response( conn, (mongo_reply **)&(cursor->reply) );
     if( res != MONGO_OK ) {
-        free((mongo_cursor*)cursor); /* cast away volatile, not changing type */
+        free( cursor );
         return NULL;
     }
 
@@ -637,10 +639,10 @@ mongo_cursor* mongo_find(mongo_connection* conn, const char* ns, bson* query,
     cursor->ns = bson_malloc(sl);
     if (!cursor->ns){
         free(cursor->reply);
-        free((mongo_cursor*)cursor); /* cast away volatile, not changing type */
+        free( cursor );
         return NULL;
     }
-    memcpy((void*)cursor->ns, ns, sl); /* cast needed to silence GCC warning */
+    memcpy( (void*)cursor->ns, ns, sl );
     cursor->conn = conn;
     cursor->current.data = NULL;
     cursor->options = options;
@@ -666,12 +668,15 @@ int mongo_find_one(mongo_connection* conn, const char* ns, bson* query,
 int mongo_cursor_get_more(mongo_cursor* cursor){
     int res;
 
-    if( ! cursor->reply )
-        return MONGO_CURSOR_INVALID;
-    else if( ! cursor->reply->fields.cursorID )
-        return MONGO_CURSOR_EXHAUSTED;
+    if( ! cursor->reply ) {
+        cursor->err = MONGO_CURSOR_INVALID;
+        return MONGO_ERROR;
+    }
+    else if( ! cursor->reply->fields.cursorID ) {
+        cursor->err = MONGO_CURSOR_EXHAUSTED;
+        return MONGO_ERROR;
+    }
     else {
-        mongo_connection* conn = cursor->conn;
         char* data;
         int sl = strlen(cursor->ns)+1;
         mongo_message * mm = mongo_message_create(16 /*header*/
@@ -686,41 +691,45 @@ int mongo_cursor_get_more(mongo_cursor* cursor){
         data = mongo_data_append32(data, &ZERO);
         data = mongo_data_append64(data, &cursor->reply->fields.cursorID);
 
-        res = mongo_message_send(conn, mm);
+        free(cursor->reply);
+        res = mongo_message_send( cursor->conn, mm);
         if( res != MONGO_OK ) {
             mongo_cursor_destroy(cursor);
-            return res;
+            return MONGO_ERROR;
         }
 
-        free(cursor->reply);
         res = mongo_read_response( cursor->conn, &(cursor->reply) );
         if( res != MONGO_OK ) {
-            cursor->reply = NULL;
             mongo_cursor_destroy(cursor);
-            return res;
+            return MONGO_ERROR;
         }
+        cursor->current.data = NULL;
 
         return MONGO_OK;
     }
 }
 
 int mongo_cursor_next(mongo_cursor* cursor){
-    char* bson_addr;
+    char *next_object;
+    char *message_end;
+    int res;
 
     if( !cursor->reply )
         return MONGO_ERROR;
 
-    /* If tailable but num is 0, we need to do a getmore. */
-    if ((cursor->options & MONGO_TAILABLE ) &&
-        cursor->reply->fields.num == 0 ) {
-
-        if( mongo_cursor_get_more(cursor) != MONGO_OK )
-            return MONGO_ERROR;
-    }
-
     /* no data */
     if ( cursor->reply->fields.num == 0 ) {
-        return MONGO_ERROR;
+
+        /* Special case for tailable cursors. */
+        if( cursor->reply->fields.cursorID ) {
+            if( ( mongo_cursor_get_more(cursor) != MONGO_OK ) ||
+                cursor->reply->fields.num == 0 ) {
+                return MONGO_ERROR;
+            }
+        }
+
+        else
+            return MONGO_ERROR;
     }
 
     /* first */
@@ -729,13 +738,23 @@ int mongo_cursor_next(mongo_cursor* cursor){
         return MONGO_OK;
     }
 
-    bson_addr = cursor->current.data + bson_size(&cursor->current);
-    if (bson_addr >= ((char*)cursor->reply + cursor->reply->head.len)){
+    next_object = cursor->current.data + bson_size(&cursor->current);
+    message_end = (char*)cursor->reply + cursor->reply->head.len;
+
+    if (next_object >= message_end) {
         if( mongo_cursor_get_more(cursor) != MONGO_OK )
             return MONGO_ERROR;
+
+        /* If there's still a cursor id, then the message should be pending.
+         * TODO: be sure not to overwrite conn->err. */
+        if( cursor->reply->fields.num == 0 && cursor->reply->fields.cursorID ) {
+            cursor->err = MONGO_CURSOR_PENDING;
+            return MONGO_ERROR;
+        }
+
         bson_init(&cursor->current, &cursor->reply->objs, 0);
     } else {
-        bson_init(&cursor->current, bson_addr, 0);
+        bson_init(&cursor->current, next_object, 0);
     }
 
     return MONGO_OK;
