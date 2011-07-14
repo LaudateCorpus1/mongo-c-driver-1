@@ -262,6 +262,8 @@ void gridfile_write_buffer( gridfile* gfile, const char* data, gridfs_offset len
   char* buffer;
   bson* oChunk;
   gridfs_offset to_write = length + gfile->pending_len;
+  chunks_to_write = to_write / DEFAULT_CHUNK_SIZE;
+  bytes_left = to_write % DEFAULT_CHUNK_SIZE;
 
   if ( to_write < DEFAULT_CHUNK_SIZE ) { /* Less than one chunk to write */
     if( gfile->pending_data ) {
@@ -279,8 +281,6 @@ void gridfile_write_buffer( gridfile* gfile, const char* data, gridfs_offset len
      * the buffer provided up to DEFAULT_CHUNK_SIZE.
      */
     if ( gfile->pending_len > 0 ) {
-      chunks_to_write = to_write / DEFAULT_CHUNK_SIZE;
-      bytes_left = to_write % DEFAULT_CHUNK_SIZE;
 
       data_partial_len = DEFAULT_CHUNK_SIZE - gfile->pending_len;
       buffer = (char *)bson_malloc( DEFAULT_CHUNK_SIZE );
